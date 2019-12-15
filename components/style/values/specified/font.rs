@@ -772,18 +772,18 @@ impl ToComputedValue for KeywordSize {
     type ComputedValue = NonNegativeLength;
     #[inline]
     fn to_computed_value(&self, _: &Context) -> NonNegativeLength {
+        let medium = Length::new(FONT_MEDIUM_PX as f32);
         // https://drafts.csswg.org/css-fonts-3/#font-size-prop
-        match *self {
-            KeywordSize::XXSmall => Au::from_px(FONT_MEDIUM_PX) * 3 / 5,
-            KeywordSize::XSmall => Au::from_px(FONT_MEDIUM_PX) * 3 / 4,
-            KeywordSize::Small => Au::from_px(FONT_MEDIUM_PX) * 8 / 9,
-            KeywordSize::Medium => Au::from_px(FONT_MEDIUM_PX),
-            KeywordSize::Large => Au::from_px(FONT_MEDIUM_PX) * 6 / 5,
-            KeywordSize::XLarge => Au::from_px(FONT_MEDIUM_PX) * 3 / 2,
-            KeywordSize::XXLarge => Au::from_px(FONT_MEDIUM_PX) * 2,
-            KeywordSize::XXXLarge => Au::from_px(FONT_MEDIUM_PX) * 3,
-        }
-        .into()
+        NonNegative(match *self {
+            KeywordSize::XXSmall => medium * 3.0 / 5.0,
+            KeywordSize::XSmall => medium * 3.0 / 4.0,
+            KeywordSize::Small => medium * 8.0 / 9.0,
+            KeywordSize::Medium => medium,
+            KeywordSize::Large => medium * 6.0 / 5.0,
+            KeywordSize::XLarge => medium * 3.0 / 2.0,
+            KeywordSize::XXLarge => medium * 2.0,
+            KeywordSize::XXXLarge => medium * 3.0,
+        })
     }
 
     #[inline]
