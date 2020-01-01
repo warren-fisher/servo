@@ -8,7 +8,8 @@ use crate::dom::bindings::codegen::InterfaceObjectMap;
 use crate::dom::bindings::codegen::PrototypeList;
 use crate::dom::bindings::codegen::PrototypeList::{MAX_PROTO_CHAIN_LENGTH, PROTO_OR_IFACE_LENGTH};
 use crate::dom::bindings::conversions::{jsstring_to_str, private_from_proto_check};
-use crate::dom::bindings::error::throw_invalid_this;
+use crate::dom::bindings::error::{throw_invalid_this, throw_dom_exception};
+use crate::dom::bindings::error::Error;
 use crate::dom::bindings::inheritance::TopTypeId;
 use crate::dom::bindings::root::DomRoot;
 use crate::dom::bindings::str::DOMString;
@@ -620,4 +621,50 @@ impl AsCCharPtrPtr for [u8] {
     fn as_c_char_ptr(&self) -> *const c_char {
         self as *const [u8] as *const c_char
     }
+}
+
+pub fn html_constructor_handling_pre(cx: *mut JSContext, args: CallArgs) -> Option<JSObject> {
+    // Step 2 https://html.spec.whatwg.org/multipage/#htmlconstructor
+    // The custom element definition cannot use an element interface as its constructor
+    // The new_target might be a cross-compartment wrapper. Get the underlying object
+    // so we can do the spec's object-identity checks.
+    rooted!(in(*cx) let new_target = UnwrapObjectDynamic(args.new_target().to_object(), *cx, 1));
+    if new_target.is_null() {
+        throw_dom_exception(cx, global.upcast::<GlobalScope>(), Error::Type("new.target is null".to_owned()));
+        return None;
+    }
+    if args.callee() == new_target.get() {
+        throw_dom_exception(cx, global.upcast::<GlobalScope>(),
+            Error::Type("new.target must not be the active function object".to_owned()));
+        return None;
+    }
+    // Step 6
+    rooted!(in(*cx) let mut prototype = ptr::null_mut::<JSObject>());
+    {
+        rooted!(in(*cx) let mut proto_val = UndefinedValue());
+        let _ac = JSAutoRealm::new(*cx, new_target.get());
+        if !JS_GetProperty(*cx, new_target.handle(), b"prototype\\0".as_ptr() as *const _, proto_val.handle_mut()) {
+            return None;
+        }
+        if !proto_val.is_object() {
+            // Step 7 of https://html.spec.whatwg.org/multipage/#htmlconstructor.
+            // This fallback behavior is designed to match analogous behavior for the
+            // JavaScript built-ins. So we enter the compartment of our underlying
+            // newTarget object and fall back to the prototype object from that global.
+            // XXX The spec says to use GetFunctionRealm(), which is not actually
+            // the same thing as what we have here (e.g. in the case of scripted callable proxies
+            // whose target is not same-compartment with the proxy, or bound functions, etc).
+            // https://bugzilla.mozilla.org/show_bug.cgi?id=1317658
+            rooted!(in(*cx) let global_object = CurrentGlobalOrNull(*cx));
+            GetProtoObject(cx, global_object.handle(), prototype.handle_mut());
+        } else {
+            // Step 6
+            prototype.set(proto_val.to_object());
+        };
+    }
+    // Wrap prototype in this context since it is from the newTarget compartment
+    if !JS_WrapObject(*cx, prototype.handle_mut()) {
+        return None;
+    }
+    return Some(prototype);
 }
