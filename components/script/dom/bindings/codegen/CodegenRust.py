@@ -5669,28 +5669,8 @@ let global = DomRoot::downcast::<dom::types::%s>(global).unwrap();
         if self.constructor.isHTMLConstructor():
             signatures = self.constructor.signatures()
             assert len(signatures) == 1
-            constructorCall = CGGeneric("""let prototype = dom::bindings::utils::html_constructor_handling_pre(*cx, args);
-    match prototype {
-        None => return false,
-        Some(prototype) => {
-            let result: Result<DomRoot<%s>, Error> = html_constructor(&global, &args);
-            let result = match result {
-                Ok(result) => result,
-                Err(e) => {
-                    throw_dom_exception(cx, global.upcast::<GlobalScope>(), e);
-                    return false;
-                },
-            };
-            rooted!(in(*cx) let mut element = result.reflector().get_jsobject().get());
-
-            if !JS_WrapObject(*cx, element.handle_mut()) {
-                return false;
-            }
-            JS_SetPrototype(*cx, element.handle(), prototype.handle());
-            (result).to_jsval(*cx, MutableHandleValue::from_raw(args.rval()));
-            return true;
-        },
-    }""" % self.descriptor.name)
+            constructorCall = CGGeneric("""let r = dom::bindings::utils::html_constructor_handling<dom::types::%s, dom::types::%s>(*cx, args, global);
+                                        r""" % (self.descriptor.name, list(self.exposureSet)[0]))
         else:
             name = self.constructor.identifier.name
             nativeName = MakeNativeName(self.descriptor.binaryNameFor(name))
