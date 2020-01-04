@@ -5669,8 +5669,8 @@ let global = DomRoot::downcast::<dom::types::%s>(global).unwrap();
         if self.constructor.isHTMLConstructor():
             signatures = self.constructor.signatures()
             assert len(signatures) == 1
-            constructorCall = CGGeneric("""let r = dom::bindings::utils::html_constructor_handling<dom::types::%s, dom::types::%s>(*cx, args, global);
-                                        r""" % (self.descriptor.name, list(self.exposureSet)[0]))
+            constructorCall = CGGeneric("""let r = dom::bindings::utils::html_constructor_handling::<dom::types::%s, _>(cx, args, global);
+                                        r""" % self.descriptor.name)
         else:
             name = self.constructor.identifier.name
             nativeName = MakeNativeName(self.descriptor.binaryNameFor(name))
