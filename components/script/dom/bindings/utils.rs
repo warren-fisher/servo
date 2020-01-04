@@ -11,8 +11,9 @@ use crate::dom::bindings::conversions::{jsstring_to_str, private_from_proto_chec
 use crate::dom::bindings::error::{throw_invalid_this, throw_dom_exception};
 use crate::dom::bindings::error::Error;
 use crate::dom::bindings::htmlconstructor::html_constructor;
-use crate::dom::bindings::inheritance::TopTypeId;
+use crate::dom::bindings::inheritance::{TopTypeId, Castable};
 use crate::dom::bindings::root::DomRoot;
+use crate::dom::bindings::reflector::DomObject;
 use crate::dom::bindings::str::DOMString;
 use crate::dom::bindings::trace::trace_object;
 use crate::dom::messageport::MessagePort;
@@ -26,7 +27,6 @@ use js::glue::{UnwrapObjectDynamic, RUST_JSID_TO_INT, RUST_JSID_TO_STRING};
 use js::glue::{
     RUST_FUNCTION_VALUE_TO_JITINFO, RUST_JSID_IS_INT, RUST_JSID_IS_STRING, RUST_JSID_IS_VOID,
 };
-use js::jsapi::Handle as RawHandle;
 use js::jsapi::HandleId as RawHandleId;
 use js::jsapi::HandleObject as RawHandleObject;
 use js::jsapi::MutableHandleObject as RawMutableHandleObject;
@@ -628,7 +628,7 @@ impl AsCCharPtrPtr for [u8] {
     }
 }
 
-pub fn html_constructor_handling<T, U>(cx: SafeJSContext, args: CallArgs, global: U) -> bool {
+pub fn html_constructor_handling<T: DomObject, U: Castable>(cx: SafeJSContext, args: CallArgs, global: U) -> bool {
     // Step 2 https://html.spec.whatwg.org/multipage/#htmlconstructor
     // The custom element definition cannot use an element interface as its constructor
     // The new_target might be a cross-compartment wrapper. Get the underlying object
