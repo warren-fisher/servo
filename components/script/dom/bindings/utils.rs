@@ -7,14 +7,19 @@
 use crate::dom::bindings::codegen::InterfaceObjectMap;
 use crate::dom::bindings::codegen::PrototypeList;
 use crate::dom::bindings::codegen::PrototypeList::{MAX_PROTO_CHAIN_LENGTH, PROTO_OR_IFACE_LENGTH};
-use crate::dom::bindings::conversions::{jsstring_to_str, private_from_proto_check};
-use crate::dom::bindings::error::throw_invalid_this;
-use crate::dom::bindings::inheritance::TopTypeId;
-use crate::dom::bindings::root::DomRoot;
+use crate::dom::bindings::conversions::{DerivedFrom, jsstring_to_str, private_from_proto_check};
+use crate::dom::bindings::error::{throw_invalid_this, throw_dom_exception};
+use crate::dom::bindings::error::Error;
+use crate::dom::bindings::inheritance::{TopTypeId, Castable};
+use crate::dom::bindings::root::{DomRoot, StableTraceObject};
 use crate::dom::bindings::str::DOMString;
 use crate::dom::bindings::trace::trace_object;
+use crate::dom::bindings::htmlconstructor::html_constructor;
+use crate::dom::element::Element;
 use crate::dom::messageport::MessagePort;
 use crate::dom::windowproxy;
+use crate::dom::window::Window;
+use crate::dom::globalscope::GlobalScope;
 use crate::script_runtime::JSContext as SafeJSContext;
 use js::conversions::{jsstr_to_string, ToJSValConvertible};
 use js::glue::{CallJitGetterOp, CallJitMethodOp, CallJitSetterOp, IsWrapper};
@@ -23,6 +28,8 @@ use js::glue::{UnwrapObjectDynamic, RUST_JSID_TO_INT, RUST_JSID_TO_STRING};
 use js::glue::{
     RUST_FUNCTION_VALUE_TO_JITINFO, RUST_JSID_IS_INT, RUST_JSID_IS_STRING, RUST_JSID_IS_VOID,
 };
+use js::jsapi::Handle as RawHandle;
+use js::jsapi::MutableHandle as RawMutableHandle;
 use js::jsapi::HandleId as RawHandleId;
 use js::jsapi::HandleObject as RawHandleObject;
 use js::jsapi::MutableHandleObject as RawMutableHandleObject;
@@ -32,9 +39,11 @@ use js::jsapi::{JSJitInfo, JSObject, JSTracer, JSWrapObjectCallbacks};
 use js::jsapi::{JS_EnumerateStandardClasses, JS_GetLatin1StringCharsAndLength};
 use js::jsapi::{JS_IsExceptionPending, JS_IsGlobalObject};
 use js::jsapi::{
-    JS_ResolveStandardClass, JS_StringHasLatin1Chars, ObjectOpResult, StringIsArrayIndex1,
-    StringIsArrayIndex2,
+    JS_ResolveStandardClass, JS_StringHasLatin1Chars, JS_SetPrototype, ObjectOpResult,
+    StringIsArrayIndex1, StringIsArrayIndex2,
 };
+use js::jsapi::CurrentGlobalOrNull;
+use js::jsapi::JS_WrapObject;
 use js::jsval::{JSVal, UndefinedValue};
 use js::rust::wrappers::JS_DeletePropertyById;
 use js::rust::wrappers::JS_ForwardGetPropertyTo;
@@ -620,4 +629,64 @@ impl AsCCharPtrPtr for [u8] {
     fn as_c_char_ptr(&self) -> *const c_char {
         self as *const [u8] as *const c_char
     }
+}
+
+pub fn html_constructor_handling<T: DerivedFrom<Element> + StableTraceObject>(cx: SafeJSContext, args: CallArgs, global: &Window) -> bool {
+    // Step 2 https://html.spec.whatwg.org/multipage/#htmlconstructor
+    // The custom element definition cannot use an element interface as its constructor
+    // The new_target might be a cross-compartment wrapper. Get the underlying object
+    // so we can do the spec's object-identity checks.
+    rooted!(in(*cx) let new_target = UnwrapObjectDynamic(args.new_target().to_object(), *cx, 1));
+    if new_target.is_null() {
+        throw_dom_exception(cx, global.upcast::<GlobalScope>(), Error::Type("new.target is null".to_owned()));
+        return false;
+    }
+    if args.callee() == new_target.get() {
+        throw_dom_exception(cx, global.upcast::<GlobalScope>(),
+            Error::Type("new.target must not be the active function object".to_owned()));
+        return false;
+    }
+    // Step 6
+    rooted!(in(*cx) let mut prototype = ptr::null_mut::<JSObject>());
+    {
+        rooted!(in(*cx) let mut proto_val = UndefinedValue());
+        let _ac = JSAutoRealm::new(*cx, new_target.get());
+        if !JS_GetProperty(*cx, new_target.handle(), b"prototype\\0".as_ptr() as *const _, proto_val.handle_mut()) {
+            return false;
+        }
+        if !proto_val.is_object() {
+            // Step 7 of https://html.spec.whatwg.org/multipage/#htmlconstructor.
+            // This fallback behavior is designed to match analogous behavior for the
+            // JavaScript built-ins. So we enter the compartment of our underlying
+            // newTarget object and fall back to the prototype object from that global.
+            // XXX The spec says to use GetFunctionRealm(), which is not actually
+            // the same thing as what we have here (e.g. in the case of scripted callable proxies
+            // whose target is not same-compartment with the proxy, or bound functions, etc).
+            // https://bugzilla.mozilla.org/show_bug.cgi?id=1317658
+            rooted!(in(*cx) let global_object = CurrentGlobalOrNull(*cx));
+            GetProtoObject(cx, RawHandle::from(global_object.handle()), RawMutableHandle::from(prototype.handle_mut()));
+        } else {
+            // Step 6
+            prototype.set(proto_val.to_object());
+        };
+    }
+    // Wrap prototype in this context since it is from the newTarget compartment
+    if !JS_WrapObject(*cx, RawMutableHandle::from(prototype.handle_mut())) {
+        return false;
+    }
+    let result: Result<DomRoot<T>, Error> = html_constructor(&global, &args);
+    let result = match result {
+        Ok(result) => result,
+        Err(e) => {
+            throw_dom_exception(cx, global.upcast::<GlobalScope>(), e);
+            return false;
+        },
+    };
+    rooted!(in(*cx) let mut element = result.reflector().get_jsobject().get());
+    if !JS_WrapObject(*cx, RawMutableHandle::from(element.handle_mut())) {
+        return false;
+    }
+    JS_SetPrototype(*cx, RawHandle::from(element.handle()), RawHandle::from(prototype.handle()));
+    (result).to_jsval(*cx, MutableHandleValue::from_raw(args.rval()));
+    return true;
 }
